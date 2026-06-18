@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#000810">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<link rel="manifest" href="/static/manifest.json">
+<title>J.A.R.V.I.S.</title>
+<style>
+/* ── Reset & Base ─────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+    --cyan:    #00d9ff;
+    --blue:    #4d9fff;
+    --green:   #00ff88;
+    --red:     #ff0040;
+    --gold:    #ffaa00;
+    --bg:      #000810;
+    --panel:   rgba(0,217,255,0.06);
+    --border:  rgba(0,217,255,0.2);
+    --text:    #e8f4ff;
+    --dim:     rgba(0,217,255,0.45);
+}
+html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--cyan);
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ── App Layout ──────────────────────────────── */
+#app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    position: relative;
+    overflow: hidden;
+}
+
+/* ── Scan Line Overlay ───────────────────────── */
+#scan-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 3px,
+        rgba(0,217,255,0.015) 3px,
+        rgba(0,217,255,0.015) 4px
+    );
+    animation: scanMove 8s linear infinite;
+}
+@keyframes scanMove {
+    0%   { background-position: 0 0; }
+    100% { background-position: 0 100px; }
+}
+#scan-line {
+    position: fixed;
+    left: 0; right: 0;
+    height: 2px;
+    background: rgba(0,217,255,0.15);
+    animation: scanLine 4s linear infinite;
+    pointer-events: none;
+    z-index: 2;
+}
+@keyframes scanLine {
+    0%   { top: 0%; }
+    100% { top: 100%; }
+}
+
+/* ── Corner Brackets ─────────────────────────── */
+.corner {
+    position: fixed;
+    width: 22px; height: 22px;
+    pointer-events: none;
+    z-index: 3;
+}
+.corner::before, .corner::after {
+    content: '';
+    position: absolute;
+    background: var(--cyan);
+    opacity: 0.6;
+}
+.corner-tl { top: 8px; left: 8px; }
+.corner-tl::before { width: 100%; height: 2px; top: 0; left: 0; }
+.corner-tl::after  { width: 2px; height: 100%; top: 0; left: 0; }
+.corner-tr { top: 8px; right: 8px; }
+.corner-tr::before { width: 100%; height: 2px; top: 0; right: 0; }
+.corner-tr::after  { width: 2px; height: 100%; top: 0; right: 0; }
+.corner-bl { bottom: 8px; left: 8px; }
+.corner-bl::before { width: 100%; height: 2px; bottom: 0; left: 0; }
+.corner-bl::after  { width: 2px; height: 100%; bottom: 0; left: 0; }
+.corner-br { bottom: 8px; right: 8px; }
+.corner-br::before { width: 100%; height: 2px; bottom: 0; right: 0; }
+.corner-br::after  { width: 2px; height: 100%; bottom: 0; right: 0; }
+
+/* ── Header ──────────────────────────────────── */
+#header {
+    flex-shrink: 0;
+    padding: 10px 16px 8px;
+    background: rgba(0,8,20,0.95);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 10;
+}
+#header-title { flex: 1; }
+#header-title h1 {
+    font-size: 15px;
+    letter-spacing: 5px;
+    color: var(--cyan);
+    font-weight: bold;
+}
+#header-title p {
+    font-size: 7px;
+    letter-spacing: 2px;
+    color: var(--dim);
+    margin-top: 1px;
+}
+#status-badge {
+    font-size: 8px;
+    letter-spacing: 1px;
+    color: var(--green);
+    border: 1px solid rgba(0,255,136,0.3);
+    padding: 3px 8px;
+    background: rgba(0,255,136,0.05);
+}
+#clock {
+    font-size: 12px;
+    letter-spacing: 2px;
+    color: var(--dim);
+}
+
+/* ── Arc Reactor Section ─────────────────────── */
+#reactor-section {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 6px 0 4px;
+    background: rgba(0,4,12,0.8);
+    border-bottom: 1px solid var(--border);
+}
+#reactor-canvas {
+    display: block;
+}
+
+/* ── Chat Area ───────────────────────────────── */
+#chat-area {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+}
+#chat-area::-webkit-scrollbar { display: none; }
+
+.msg-wrap {
+    display: flex;
+    flex-direction: column;
+    animation: msgIn 0.25s ease;
+}
+@keyframes msgIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.msg-wrap.you  { align-items: flex-end; }
+.msg-wrap.jarvis { align-items: flex-start; }
+
+.msg-label {
+    font-size: 8px;
+    letter-spacing: 2px;
+    margin-bottom: 3px;
+    opacity: 0.5;
+}
+.msg-wrap.you .msg-label    { color: var(--blue); }
+.msg-wrap.jarvis .msg-label { color: var(--cyan); }
+
+.msg-bubble {
+    max-width: 82%;
+    padding: 10px 13px;
+    font-size: 13px;
+    line-height: 1.65;
+    border-radius: 2px;
+}
+.msg-wrap.you .msg-bubble {
+    background: rgba(77,159,255,0.12);
+    border: 1px solid rgba(77,159,255,0.3);
+    border-radius: 12px 12px 2px 12px;
+    color: rgba(200,230,255,0.9);
+}
+.msg-wrap.jarvis .msg-bubble {
+    background: rgba(0,217,255,0.06);
+    border: 1px solid rgba(0,217,255,0.18);
+    border-left: 3px solid var(--cyan);
+    border-radius: 2px 12px 12px 12px;
+    color: var(--text);
+}
+.msg-time {
+    font-size: 8px;
+    color: var(--dim);
+    margin-top: 3px;
+    opacity: 0.4;
+}
+
+/* Thinking indicator */
+#thinking {
+    display: none;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 0 12px;
+}
+#thinking.show { display: flex; }
+.think-dots {
+    display: flex;
+    gap: 4px;
+    padding: 10px 14px;
+    background: rgba(0,217,255,0.06);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--cyan);
+    border-radius: 2px 12px 12px 12px;
+}
+.think-dot {
+    width: 6px; height: 6px;
+    background: var(--cyan);
+    border-radius: 50%;
+    opacity: 0.4;
+    animation: dotPulse 1.2s ease-in-out infinite;
+}
+.think-dot:nth-child(2) { animation-delay: 0.2s; }
+.think-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes dotPulse {
+    0%, 100% { opacity: 0.2; transform: scale(0.8); }
+    50%       { opacity: 1;   transform: scale(1.1); }
+}
+
+/* ── Input Area ──────────────────────────────── */
+#input-area {
+    flex-shrink: 0;
+    padding: 10px 12px;
+    background: rgba(0,8,20,0.97);
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    z-index: 10;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+}
+#prompt-arrow {
+    color: var(--cyan);
+    font-size: 20px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+#text-input {
+    flex: 1;
+    background: rgba(0,30,60,0.6);
+    border: 1px solid rgba(0,217,255,0.4);
+    border-radius: 3px;
+    color: var(--cyan);
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    padding: 10px 12px;
+    outline: none;
+    -webkit-appearance: none;
+}
+#text-input::placeholder { color: rgba(0,217,255,0.3); }
+#text-input:focus { border-color: var(--cyan); background: rgba(0,50,100,0.5); }
+
+.btn {
+    background: rgba(0,30,60,0.7);
+    border: 1px solid rgba(0,217,255,0.4);
+    border-radius: 3px;
+    color: var(--cyan);
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    letter-spacing: 1px;
+    padding: 10px 14px;
+    cursor: pointer;
+    flex-shrink: 0;
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-appearance: none;
+    touch-action: manipulation;
+}
+.btn:active { background: rgba(0,100,180,0.5); }
+#mic-btn { min-width: 46px; font-size: 16px; padding: 10px; }
+#mic-btn.listening {
+    color: var(--red);
+    border-color: var(--red);
+    background: rgba(255,0,64,0.1);
+    animation: micPulse 1s ease-in-out infinite;
+}
+@keyframes micPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255,0,64,0.4); }
+    50%       { box-shadow: 0 0 0 6px rgba(255,0,64,0); }
+}
+
+/* ── Themes ──────────────────────────────────── */
+.theme-red    { --cyan: #ff0040; --blue: #ff6688; --green: #ffaa00; }
+.theme-gold   { --cyan: #ffaa00; --blue: #ffcc44; --green: #00ff88; }
+.theme-stealth{ --cyan: #00ff88; --blue: #00cc66; --green: #00d9ff; }
+.theme-purple { --cyan: #b450ff; --blue: #8833dd; --green: #00d9ff; }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Scan effects -->
+  <div id="scan-overlay"></div>
+  <div id="scan-line"></div>
+  <div class="corner corner-tl"></div>
+  <div class="corner corner-tr"></div>
+  <div class="corner corner-bl"></div>
+  <div class="corner corner-br"></div>
+
+  <!-- Header -->
+  <div id="header">
+    <div id="header-title">
+      <h1>J.A.R.V.I.S.</h1>
+      <p>JUST A RATHER VERY INTELLIGENT SYSTEM</p>
+    </div>
+    <div id="clock">--:--</div>
+    <div id="status-badge">● ONLINE</div>
+  </div>
+
+  <!-- Arc Reactor -->
+  <div id="reactor-section">
+    <canvas id="reactor-canvas" width="180" height="180"></canvas>
+  </div>
+
+  <!-- Chat -->
+  <div id="chat-area">
+    <div class="msg-wrap jarvis">
+      <div class="msg-label">JARVIS</div>
+      <div class="msg-bubble">Scanning complete. All systems operating within optimal parameters. Arc Reactor core is holding steady. At your disposal, Sir.</div>
+      <div class="msg-time">ONLINE</div>
+    </div>
+  </div>
+
+  <!-- Thinking -->
+  <div id="thinking">
+    <div class="think-dots">
+      <div class="think-dot"></div>
+      <div class="think-dot"></div>
+      <div class="think-dot"></div>
+    </div>
+  </div>
+
+  <!-- Input -->
+  <div id="input-area">
+    <div id="prompt-arrow">›</div>
+    <input type="text" id="text-input" placeholder="Enter command, Sir..." autocomplete="off" autocorrect="off" spellcheck="false">
+    <button class="btn" id="send-btn" onclick="sendMsg()">SEND</button>
+    <button class="btn" id="mic-btn" onclick="toggleMic()">🎤</button>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+const state = {
+  history:   [],
+  speaking:  false,
+  activity:  0.15,
+  listening: false,
+  angle:     0,
+  pulse:     0,
+  wave:      0,
+};
+
+// ── Clock ──────────────────────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Arc Reactor ────────────────────────────────────────────────────────────
+const canvas = document.getElementById('reactor-canvas');
+const ctx    = canvas.getContext('2d');
+const CX = 90, CY = 90;
+
+const rings = [
+  [72, 0.15,  1, 0.10, 1, 280],
+  [64, 0.25, -1, 0.14, 1, 260],
+  [56, 0.40,  1, 0.20, 1, 300],
+  [48, 0.60, -1, 0.26, 2, 240],
+  [40, 0.85,  1, 0.32, 1, 320],
+  [32, 1.10, -1, 0.38, 2, 270],
+  [24, 1.50,  1, 0.45, 1, 290],
+  [16, 2.20, -1, 0.55, 2, 260],
+  [9,  3.00,  1, 0.65, 1, 310],
+];
+
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return {r,g,b};
+}
+
+function getPrimaryColor() {
+  const style = getComputedStyle(document.documentElement);
+  const c = style.getPropertyValue('--cyan').trim() || '#00d9ff';
+  try { return hexToRgb(c.length === 7 ? c : '#00d9ff'); }
+  catch { return {r:0, g:217, b:255}; }
+}
+
+function drawReactor() {
+  ctx.clearRect(0, 0, 180, 180);
+  const act      = state.activity;
+  const pSin     = Math.sin(state.pulse);
+  const col      = getPrimaryColor();
+  const {r,g,b}  = col;
+
+  // Outer glow
+  for (let i = 0; i < 4; i++) {
+    const gr = 76 + i*6 + act*10;
+    const ga = Math.max(0, Math.round(18 - i*4 + act*12));
+    ctx.beginPath();
+    ctx.arc(CX, CY, gr, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(${r},${g},${b},${ga/255})`;
+    ctx.fill();
+  }
+
+  // Rings
+  rings.forEach(([radius, speed, dir, baseAlpha, width, spanDeg]) => {
+    const r2    = radius + 2*pSin*(1+act);
+    const alpha = Math.min(1, baseAlpha + act*0.35 + pSin*0.08);
+    const startA = state.angle * speed * dir;
+    const spanR  = (spanDeg * Math.PI) / 180;
+    ctx.beginPath();
+    ctx.arc(CX, CY, r2, startA, startA + spanR);
+    ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+    ctx.lineWidth   = width + (state.speaking ? 0.5 : 0);
+    ctx.lineCap     = 'round';
+    ctx.stroke();
+  });
+
+  // Spokes
+  for (let i = 0; i < 8; i++) {
+    const a    = state.angle * 0.3 + i * Math.PI/4;
+    const rIn  = 12;
+    const rOut = 28 + act*10 + 4*Math.sin(state.pulse*1.5 + i*0.5);
+    const al   = 0.25 + act*0.3 + 0.2*Math.sin(state.pulse*2 + i*0.8);
+    ctx.beginPath();
+    ctx.moveTo(CX + Math.cos(a)*rIn,  CY + Math.sin(a)*rIn);
+    ctx.lineTo(CX + Math.cos(a)*rOut, CY + Math.sin(a)*rOut);
+    ctx.strokeStyle = `rgba(${r},${g},${b},${Math.max(0,al)})`;
+    ctx.lineWidth   = 1;
+    ctx.stroke();
+  }
+
+  // Waveform when speaking
+  if (state.speaking || act > 0.4) {
+    const amp = state.speaking ? act : act*0.4;
+    if (amp > 0.05) {
+      ctx.beginPath();
+      for (let i = 0; i <= 72; i++) {
+        const frac  = i/72;
+        const angle = frac * Math.PI * 2;
+        const dist  = 52 + 12*amp*Math.sin(state.wave*6 + angle*7);
+        const x = CX + Math.cos(angle)*dist;
+        const y = CY + Math.sin(angle)*dist;
+        i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = `rgba(77,159,255,${0.7*amp})`;
+      ctx.lineWidth   = 1.5;
+      ctx.stroke();
+    }
+  }
+
+  // Center orb
+  const orbR = 9 + 3*Math.abs(pSin) + act*4;
+  const grad = ctx.createRadialGradient(CX, CY, 0, CX, CY, orbR);
+  grad.addColorStop(0,   'rgba(220,245,255,1)');
+  grad.addColorStop(0.4, `rgba(${r},${g},${b},0.9)`);
+  grad.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+  ctx.beginPath();
+  ctx.arc(CX, CY, orbR, 0, Math.PI*2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // White dot
+  const dot = 3 + Math.abs(pSin)*1.5;
+  ctx.beginPath();
+  ctx.arc(CX, CY, dot, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.fill();
+}
+
+function animateReactor() {
+  const spd   = 0.018 + state.activity*0.04;
+  state.angle += spd;
+  state.pulse  = (state.pulse + 0.04) % (Math.PI*2);
+  state.wave   = (state.wave  + 0.07) % (Math.PI*2);
+  if (!state.speaking && state.activity > 0.15)
+    state.activity = Math.max(0.15, state.activity - 0.006);
+  drawReactor();
+  requestAnimationFrame(animateReactor);
+}
+animateReactor();
+
+// ── Chat ───────────────────────────────────────────────────────────────────
+function timeStr() {
+  return new Date().toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+}
+
+function addMsg(role, text) {
+  const chat = document.getElementById('chat-area');
+  const wrap = document.createElement('div');
+  wrap.className = `msg-wrap ${role}`;
+  wrap.innerHTML = `
+    <div class="msg-label">${role === 'you' ? 'YOU' : 'JARVIS'}</div>
+    <div class="msg-bubble">${text.replace(/\n/g,'<br>')}</div>
+    <div class="msg-time">${timeStr()}</div>`;
+  chat.appendChild(wrap);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function showThinking(val) {
+  document.getElementById('thinking').classList.toggle('show', val);
+  if (val) {
+    const chat = document.getElementById('chat-area');
+    chat.scrollTop = chat.scrollHeight;
+  }
+}
+
+// ── Send message ───────────────────────────────────────────────────────────
+async function sendMsg() {
+  const inp  = document.getElementById('text-input');
+  const text = inp.value.trim();
+  if (!text || state.thinking) return;
+  inp.value = '';
+  addMsg('you', text);
+  state.history.push({role:'user', content:text});
+  state.thinking = true;
+  state.activity = 0.85;
+  showThinking(true);
+  document.getElementById('status-badge').textContent = '◈ PROCESSING';
+  document.getElementById('status-badge').style.color = '#00d9ff';
+
+  try {
+    const resp = await fetch('/ask', {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify({text, history: state.history.slice(-20)})
+    });
+    const data = await resp.json();
+    showThinking(false);
+    state.thinking = false;
+    const reply = data.reply || 'Processing complete, Sir.';
+    state.history.push({role:'assistant', content:reply});
+    if (state.history.length > 40)
+      state.history = state.history.slice(-30);
+    addMsg('jarvis', reply);
+    state.speaking = true;
+    state.activity = 1.0;
+    document.getElementById('status-badge').textContent = '◈ SPEAKING';
+    document.getElementById('status-badge').style.color = '#4d9fff';
+    // Simulate speaking duration
+    const dur = Math.max(2000, reply.length * 55);
+    setTimeout(() => {
+      state.speaking = false;
+      state.activity = 0.2;
+      document.getElementById('status-badge').textContent = '● ONLINE';
+      document.getElementById('status-badge').style.color = '#00ff88';
+    }, Math.min(dur, 8000));
+  } catch(e) {
+    showThinking(false);
+    state.thinking = false;
+    state.activity = 0.15;
+    addMsg('jarvis', `Communication disrupted, Sir. Please retry. Error: ${e.message}`);
+    document.getElementById('status-badge').textContent = '● ONLINE';
+    document.getElementById('status-badge').style.color = '#00ff88';
+  }
+}
+
+// Enter key
+document.getElementById('text-input').addEventListener('keypress', e => {
+  if (e.key === 'Enter') { e.preventDefault(); sendMsg(); }
+});
+
+// ── Voice Input ────────────────────────────────────────────────────────────
+let recognition = null;
+
+function toggleMic() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    addMsg('jarvis', 'Voice recognition not available in this browser. Try Chrome, Sir.');
+    return;
+  }
+  if (state.listening) {
+    stopMic(); return;
+  }
+  startMic();
+}
+
+function startMic() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SR();
+  recognition.lang        = 'en-IN';
+  recognition.continuous  = false;
+  recognition.interimResults = false;
+
+  recognition.onstart = () => {
+    state.listening = true;
+    state.activity  = 0.7;
+    document.getElementById('mic-btn').classList.add('listening');
+    document.getElementById('mic-btn').textContent = '●';
+    document.getElementById('status-badge').textContent = '◈ LISTENING';
+    document.getElementById('status-badge').style.color = '#ffaa00';
+  };
+
+  recognition.onresult = e => {
+    const text = e.results[0][0].transcript;
+    document.getElementById('text-input').value = text;
+    stopMic();
+    setTimeout(() => sendMsg(), 200);
+  };
+
+  recognition.onerror = () => stopMic();
+  recognition.onend   = () => stopMic();
+  recognition.start();
+}
+
+function stopMic() {
+  state.listening = false;
+  state.activity  = 0.15;
+  document.getElementById('mic-btn').classList.remove('listening');
+  document.getElementById('mic-btn').textContent = '🎤';
+  document.getElementById('status-badge').textContent = '● ONLINE';
+  document.getElementById('status-badge').style.color = '#00ff88';
+  if (recognition) { try { recognition.stop(); } catch(e){} recognition = null; }
+}
+
+// ── PWA Install prompt ─────────────────────────────────────────────────────
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredPrompt = e;
+  // Show install hint after 10 seconds
+  setTimeout(() => {
+    if (deferredPrompt) {
+      addMsg('jarvis', 'Tip: You can install JARVIS as an app. Tap your browser menu and select "Add to Home Screen", Sir.');
+    }
+  }, 10000);
+});
+</script>
+</body>
+</html>
