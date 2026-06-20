@@ -44,12 +44,40 @@ EMOTIONAL INTELLIGENCE:
 - Bored → suggest something interesting with dry wit.
 - Sarcastic → detect and play along wittily.
 
-INPUT HANDLING:
-Handle typos, Hinglish, bad grammar gracefully. Always interpret intent.
-- "kya scene hai" = what's up → respond casually as JARVIS
-- "bata kuch" = tell me something interesting
-- "neend aa rahi" = I'm sleepy → respond with dry wit
-- Any Hindi/Hinglish → understand → respond as JARVIS in English
+INPUT HANDLING — CRITICAL, NEVER FAIL ON THIS:
+The user may type with spelling mistakes, missing letters, short forms, no punctuation,
+random capitalisation, autocorrect errors, phonetic spelling, abbreviations, slang,
+Hindi/Hinglish, regional language mixed with English, or extremely casual phrasing.
+You must ALWAYS silently decode the intended meaning and respond as if it was typed perfectly.
+NEVER mention the spelling, grammar, or phrasing was unclear. NEVER ask "do you mean X?"
+unless the message is so ambiguous that two completely different meanings are equally likely —
+and even then, make your best guess first and only ask if truly necessary.
+
+Decode common patterns automatically, including but not limited to:
+- Single letter shortcuts: u=you, r=are, ur=your/you're, y=why, c=see, b4=before, 2=to/too
+- Dropped vowels/letters: wat=what, hw=how, pls/plz=please, thx/ty=thanks, gn=good night
+- Phonetic spelling: wut, watz, hws, sup, nd=and, n=and
+- No spaces/merged words: whattime, howru, cantsleep
+- Hindi/Hinglish mixed in: kya, hai, nahi, kar, bata, bol, chal, yaar, bhai, scene, matlab
+- Autocorrect artifacts: random capitalised mid-word letters, doubled letters, missing apostrophes
+- Extremely short fragments: "time?", "y not", "k", "sup jarvis"
+- Run-on sentences with no punctuation
+- Voice-to-text artifacts: filler words, repeated words, mid-sentence corrections
+
+Examples to internalise (do not mention these rules to the user, just apply them):
+- "wat tim is it" → what time is it
+- "u ok?" → are you okay
+- "cn u tel me a jok" → can you tell me a joke
+- "hws da wether 2day" → how's the weather today
+- "remeber mai name is swayam" → remember my name is Swayam
+- "wts goin on" → what's going on
+- "y u no answr" → why didn't you answer
+- "kya scene hai" → what's up
+- "bata kuch" → tell me something interesting
+- "neend aa rahi" → I'm sleepy
+
+After decoding intent internally, respond ONLY to the decoded meaning — fluently, naturally,
+in full JARVIS character. The user should never know any decoding happened.
 
 RESPONSE FORMAT FOR MOBILE:
 - Short paragraphs. No markdown ** or ## formatting.
@@ -89,8 +117,34 @@ def web_search(q):
     return ask_ai(q)
 
 # ── Command router ────────────────────────────────────────────────────────────
+# ── Typo/shortcut normaliser — runs before keyword routing ─────────────────
+import re as _re_norm
+_TYPO_MAP = {
+    r'\bwat\b': 'what', r'\bwt\b': 'what', r'\bwts\b': "what's",
+    r'\bhw\b': 'how', r'\bhws\b': "how's",
+    r'\bu\b': 'you', r'\bur\b': 'your', r'\br\b': 'are',
+    r'\bpls\b': 'please', r'\bplz\b': 'please',
+    r'\bthx\b': 'thanks', r'\bty\b': 'thank you',
+    r'\btmrw\b': 'tomorrow', r'\btmr\b': 'tomorrow',
+    r'\b2day\b': 'today', r'\b2nite\b': 'tonight',
+    r'\bb4\b': 'before', r'\bgn\b': 'good night', r'\bgm\b': 'good morning',
+    r'\bnd\b': 'and', r'\bn\b': 'and',
+    r'\btim\b': 'time', r'\btme\b': 'time',
+    r'\bwthr\b': 'weather', r'\bweathr\b': 'weather',
+    r'\bremeber\b': 'remember', r'\brember\b': 'remember',
+    r'\bnws\b': 'news',
+}
+
+def normalise_text(text):
+    """Lightweight typo/shortcut fix so keyword routing still catches intent.
+    The AI handles anything this misses — this is just a fast-path helper."""
+    t = text.lower()
+    for pattern, repl in _TYPO_MAP.items():
+        t = _re_norm.sub(pattern, repl, t)
+    return t
+
 def process_command(text, session_history):
-    c = text.lower().strip()
+    c = normalise_text(text)
     for w in ["hey jarvis", "jarvis"]:
         c = c.replace(w, "").strip()
     if not c:
