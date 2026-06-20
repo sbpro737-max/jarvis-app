@@ -316,9 +316,151 @@ html, body {
 .theme-gold   { --cyan: #ffaa00; --blue: #ffcc44; --green: #00ff88; }
 .theme-stealth{ --cyan: #00ff88; --blue: #00cc66; --green: #00d9ff; }
 .theme-purple { --cyan: #b450ff; --blue: #8833dd; --green: #00d9ff; }
+
+/* ── Lock Screen ─────────────────────────────── */
+#lock-screen {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 22px;
+    padding: 24px;
+    text-align: center;
+}
+#lock-screen.hidden { display: none; }
+#lock-arc {
+    width: 90px; height: 90px;
+}
+#lock-title {
+    font-size: 14px;
+    letter-spacing: 5px;
+    color: var(--cyan);
+}
+#lock-subtitle {
+    font-size: 8px;
+    letter-spacing: 2px;
+    color: var(--dim);
+    margin-top: -10px;
+}
+#lock-status {
+    font-size: 10px;
+    color: var(--dim);
+    letter-spacing: 1px;
+    min-height: 16px;
+}
+#lock-status.error { color: var(--red); }
+#lock-status.success { color: var(--green); }
+
+#fingerprint-btn {
+    width: 76px; height: 76px;
+    border-radius: 50%;
+    border: 2px solid var(--cyan);
+    background: rgba(0,217,255,0.06);
+    color: var(--cyan);
+    font-size: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    animation: fpPulse 2.4s ease-in-out infinite;
+}
+@keyframes fpPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0,217,255,0.25); }
+    50%       { box-shadow: 0 0 0 12px rgba(0,217,255,0); }
+}
+#fingerprint-btn:active { background: rgba(0,217,255,0.18); }
+
+#pin-toggle {
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--dim);
+    background: none;
+    border: none;
+    text-decoration: underline;
+    cursor: pointer;
+    padding: 6px;
+}
+
+#pin-area { display: none; flex-direction: column; align-items: center; gap: 14px; }
+#pin-area.show { display: flex; }
+#pin-dots { display: flex; gap: 14px; }
+.pin-dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    border: 1.5px solid var(--cyan);
+    background: transparent;
+    transition: background 0.15s;
+}
+.pin-dot.filled { background: var(--cyan); }
+#pin-keypad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    width: 220px;
+}
+.pin-key {
+    aspect-ratio: 1;
+    border: 1px solid rgba(0,217,255,0.3);
+    background: rgba(0,217,255,0.04);
+    color: var(--cyan);
+    font-family: 'Courier New', monospace;
+    font-size: 18px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+.pin-key:active { background: rgba(0,217,255,0.2); }
+.pin-key.empty { visibility: hidden; }
+
+#setup-note {
+    font-size: 9px;
+    color: var(--dim);
+    max-width: 260px;
+    line-height: 1.7;
+}
 </style>
 </head>
 <body>
+<!-- Lock Screen -->
+<div id="lock-screen">
+  <svg id="lock-arc" viewBox="0 0 90 90">
+    <circle cx="45" cy="45" r="40" fill="none" stroke="var(--cyan)" stroke-opacity="0.15" stroke-width="2"/>
+    <circle cx="45" cy="45" r="40" fill="none" stroke="var(--cyan)" stroke-width="2"
+      stroke-dasharray="60 190" stroke-linecap="round">
+      <animateTransform attributeName="transform" type="rotate" from="0 45 45" to="360 45 45" dur="3s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="45" cy="45" r="6" fill="var(--cyan)" fill-opacity="0.8"/>
+  </svg>
+  <div>
+    <div id="lock-title">J.A.R.V.I.S.</div>
+    <div id="lock-subtitle">IDENTITY VERIFICATION REQUIRED</div>
+  </div>
+  <div id="lock-status">Awaiting authentication, Sir.</div>
+
+  <button id="fingerprint-btn" onclick="tryFingerprint()">👆</button>
+  <button id="pin-toggle" onclick="showPinPad()">USE PIN INSTEAD</button>
+
+  <div id="pin-area">
+    <div id="pin-dots">
+      <div class="pin-dot"></div><div class="pin-dot"></div>
+      <div class="pin-dot"></div><div class="pin-dot"></div>
+    </div>
+    <div id="pin-keypad"></div>
+  </div>
+
+  <div id="setup-note"></div>
+</div>
+
 <div id="app">
   <!-- Scan effects -->
   <div id="scan-overlay"></div>
@@ -372,6 +514,232 @@ html, body {
 </div>
 
 <script>
+// ════════════════════════════════════════════════════════════════════════
+//  LOCK SCREEN — Fingerprint (WebAuthn) + PIN fallback
+//  Everything stored locally on this device only (localStorage).
+//  Nothing is sent to the server — purely a device-level gate.
+// ════════════════════════════════════════════════════════════════════════
+const LOCK = {
+  pinKey:        'jarvis_pin_hash',
+  credIdKey:     'jarvis_webauthn_id',
+  enteredPin:    '',
+  pinDigits:     4,
+};
+
+function lockEl(id) { return document.getElementById(id); }
+
+function setLockStatus(msg, type) {
+  const el = lockEl('lock-status');
+  el.textContent = msg;
+  el.className = type || '';
+}
+
+// ── Simple local hash (not cryptographic — just obscures plain PIN in storage) ──
+async function hashPin(pin) {
+  const enc  = new TextEncoder().encode('jarvis-salt-' + pin);
+  const buf  = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+function isPinSet()        { return !!localStorage.getItem(LOCK.pinKey); }
+function isFingerprintSet(){ return !!localStorage.getItem(LOCK.credIdKey); }
+
+// ── PIN keypad ──────────────────────────────────────────────────────────
+function buildKeypad() {
+  const pad = lockEl('pin-keypad');
+  pad.innerHTML = '';
+  const keys = ['1','2','3','4','5','6','7','8','9','','0','⌫'];
+  keys.forEach(k => {
+    const btn = document.createElement('button');
+    btn.className = 'pin-key' + (k === '' ? ' empty' : '');
+    btn.textContent = k;
+    if (k !== '') btn.onclick = () => onPinKey(k);
+    pad.appendChild(btn);
+  });
+}
+
+function updatePinDots() {
+  const dots = document.querySelectorAll('.pin-dot');
+  dots.forEach((d, i) => d.classList.toggle('filled', i < LOCK.enteredPin.length));
+}
+
+async function onPinKey(k) {
+  if (k === '⌫') {
+    LOCK.enteredPin = LOCK.enteredPin.slice(0, -1);
+    updatePinDots();
+    return;
+  }
+  if (LOCK.enteredPin.length >= LOCK.pinDigits) return;
+  LOCK.enteredPin += k;
+  updatePinDots();
+
+  if (LOCK.enteredPin.length === LOCK.pinDigits) {
+    if (!isPinSet()) {
+      // First time — set up PIN
+      const hash = await hashPin(LOCK.enteredPin);
+      localStorage.setItem(LOCK.pinKey, hash);
+      setLockStatus('PIN configured, Sir.', 'success');
+      setTimeout(unlockApp, 500);
+    } else {
+      const hash = await hashPin(LOCK.enteredPin);
+      if (hash === localStorage.getItem(LOCK.pinKey)) {
+        setLockStatus('Identity confirmed.', 'success');
+        setTimeout(unlockApp, 350);
+      } else {
+        setLockStatus('Incorrect PIN. Try again, Sir.', 'error');
+        LOCK.enteredPin = '';
+        updatePinDots();
+        lockEl('lock-screen').style.animation = 'none';
+        void lockEl('lock-screen').offsetWidth;
+      }
+    }
+  }
+}
+
+function showPinPad() {
+  lockEl('pin-area').classList.add('show');
+  LOCK.enteredPin = '';
+  updatePinDots();
+  if (!isPinSet()) {
+    setLockStatus('Set a 4-digit PIN, Sir.', '');
+  } else {
+    setLockStatus('Enter your PIN, Sir.', '');
+  }
+}
+
+// ── WebAuthn fingerprint / Face ID ─────────────────────────────────────
+function b64urlToBuf(s) {
+  s = s.replace(/-/g,'+').replace(/_/g,'/');
+  while (s.length % 4) s += '=';
+  const bin = atob(s);
+  const buf = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) buf[i] = bin.charCodeAt(i);
+  return buf;
+}
+function bufToB64url(buf) {
+  let bin = '';
+  new Uint8Array(buf).forEach(b => bin += String.fromCharCode(b));
+  return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+
+async function webauthnAvailable() {
+  return !!(window.PublicKeyCredential &&
+    navigator.credentials && navigator.credentials.create);
+}
+
+async function setupFingerprint() {
+  try {
+    const challenge = crypto.getRandomValues(new Uint8Array(32));
+    const userId    = crypto.getRandomValues(new Uint8Array(16));
+    const cred = await navigator.credentials.create({
+      publicKey: {
+        challenge,
+        rp:   { name: 'J.A.R.V.I.S.' },
+        user: { id: userId, name: 'owner', displayName: 'Sir' },
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+        authenticatorSelection: {
+          authenticatorAttachment: 'platform',
+          userVerification: 'required'
+        },
+        timeout: 60000,
+        attestation: 'none'
+      }
+    });
+    if (cred) {
+      localStorage.setItem(LOCK.credIdKey, bufToB64url(cred.rawId));
+      return true;
+    }
+  } catch (e) {
+    console.warn('Fingerprint setup failed:', e);
+  }
+  return false;
+}
+
+async function tryFingerprint() {
+  const available = await webauthnAvailable();
+  if (!available) {
+    setLockStatus('Biometric sensor unavailable. Use PIN, Sir.', 'error');
+    showPinPad();
+    return;
+  }
+
+  if (!isFingerprintSet()) {
+    // First-time setup
+    setLockStatus('Setting up biometric profile, Sir...', '');
+    const ok = await setupFingerprint();
+    if (ok) {
+      setLockStatus('Biometric profile created.', 'success');
+      setTimeout(unlockApp, 500);
+    } else {
+      setLockStatus('Setup declined. Use PIN instead, Sir.', 'error');
+      showPinPad();
+    }
+    return;
+  }
+
+  // Verify existing fingerprint
+  try {
+    setLockStatus('Scanning...', '');
+    const challenge = crypto.getRandomValues(new Uint8Array(32));
+    const credId    = b64urlToBuf(localStorage.getItem(LOCK.credIdKey));
+    const assertion = await navigator.credentials.get({
+      publicKey: {
+        challenge,
+        allowCredentials: [{ id: credId, type: 'public-key' }],
+        userVerification: 'required',
+        timeout: 30000
+      }
+    });
+    if (assertion) {
+      setLockStatus('Identity confirmed, Sir.', 'success');
+      setTimeout(unlockApp, 300);
+    }
+  } catch (e) {
+    console.warn('Fingerprint auth failed:', e);
+    setLockStatus('Verification failed. Try again or use PIN.', 'error');
+  }
+}
+
+function unlockApp() {
+  sessionStorage.setItem('jarvis_unlocked', '1');
+  lockEl('lock-screen').classList.add('hidden');
+  if (typeof initJarvisApp === 'function') initJarvisApp();
+}
+
+async function initLockScreen() {
+  buildKeypad();
+
+  // Already unlocked this session
+  if (sessionStorage.getItem('jarvis_unlocked') === '1') {
+    lockEl('lock-screen').classList.add('hidden');
+    if (typeof initJarvisApp === 'function') initJarvisApp();
+    return;
+  }
+
+  const fpAvailable = await webauthnAvailable();
+  const fpBtn = lockEl('fingerprint-btn');
+
+  if (!fpAvailable) {
+    fpBtn.style.display = 'none';
+    lockEl('setup-note').textContent =
+      'Biometric authentication unavailable on this device. Using PIN security.';
+    showPinPad();
+    return;
+  }
+
+  if (!isFingerprintSet() && !isPinSet()) {
+    setLockStatus('Tap below to set up biometric access, Sir.', '');
+    lockEl('setup-note').textContent =
+      'First time setup — tap the fingerprint icon to register, or use a PIN instead.';
+  } else if (isFingerprintSet()) {
+    setLockStatus('Tap to verify your identity, Sir.', '');
+  } else {
+    showPinPad();
+  }
+}
+
+initLockScreen();
+
 // ── State ──────────────────────────────────────────────────────────────────
 const state = {
   history:   [],
@@ -717,6 +1085,13 @@ window.addEventListener('beforeinstallprompt', e => {
     }
   }, 10000);
 });
+
+// ── Called once after successful lock screen unlock ────────────────────────
+// (everything else above already self-initialises on script load; this hook
+//  exists so the lock screen has something explicit to call post-auth)
+function initJarvisApp() {
+  // no-op — app is already running underneath; this just marks the handoff
+}
 </script>
 </body>
 </html>
