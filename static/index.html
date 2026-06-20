@@ -367,6 +367,7 @@ html, body {
     <input type="text" id="text-input" placeholder="Enter command, Sir..." autocomplete="off" autocorrect="off" spellcheck="false">
     <button class="btn" id="send-btn" onclick="sendMsg()">SEND</button>
     <button class="btn" id="mic-btn" onclick="toggleMic()">🎤</button>
+    <button class="btn" id="voice-toggle-btn" onclick="toggleVoice()" style="min-width:42px;font-size:15px;padding:10px;">🔊</button>
   </div>
 </div>
 
@@ -543,6 +544,60 @@ function showThinking(val) {
   }
 }
 
+// ── Voice Output — JARVIS speaks ──────────────────────────────────────────
+let jarvisVoice = null;
+let voiceEnabled = true;
+
+function pickBritishVoice() {
+  const voices = speechSynthesis.getVoices();
+  // Prefer a British male voice for JARVIS feel
+  const priority = [
+    v => v.lang === 'en-GB' && /male/i.test(v.name),
+    v => v.name.includes('Daniel'),
+    v => v.name.includes('Arthur'),
+    v => v.name.includes('Ryan'),
+    v => v.lang === 'en-GB',
+    v => v.lang.startsWith('en'),
+  ];
+  for (const test of priority) {
+    const found = voices.find(test);
+    if (found) return found;
+  }
+  return voices[0] || null;
+}
+
+if ('speechSynthesis' in window) {
+  speechSynthesis.onvoiceschanged = () => { jarvisVoice = pickBritishVoice(); };
+  jarvisVoice = pickBritishVoice();
+}
+
+function speakReply(text, onDone) {
+  if (!voiceEnabled || !('speechSynthesis' in window)) {
+    if (onDone) onDone();
+    return;
+  }
+  try {
+    speechSynthesis.cancel(); // stop any previous speech
+    const utter = new SpeechSynthesisUtterance(text);
+    if (jarvisVoice) utter.voice = jarvisVoice;
+    utter.rate   = 0.92;   // slightly slower, measured JARVIS cadence
+    utter.pitch  = 0.85;   // slightly deeper
+    utter.volume = 1.0;
+    utter.onend   = () => { if (onDone) onDone(); };
+    utter.onerror = () => { if (onDone) onDone(); };
+    speechSynthesis.speak(utter);
+  } catch (e) {
+    if (onDone) onDone();
+  }
+}
+
+function toggleVoice() {
+  voiceEnabled = !voiceEnabled;
+  if (!voiceEnabled) speechSynthesis.cancel();
+  const btn = document.getElementById('voice-toggle-btn');
+  if (btn) btn.textContent = voiceEnabled ? '🔊' : '🔇';
+}
+
 // ── Send message ───────────────────────────────────────────────────────────
 async function sendMsg() {
   const inp  = document.getElementById('text-input');
@@ -575,14 +630,14 @@ async function sendMsg() {
     state.activity = 1.0;
     document.getElementById('status-badge').textContent = '◈ SPEAKING';
     document.getElementById('status-badge').style.color = '#4d9fff';
-    // Simulate speaking duration
-    const dur = Math.max(2000, reply.length * 55);
-    setTimeout(() => {
+
+    // Speak the reply with real TTS, sync Arc Reactor to actual speech duration
+    speakReply(reply, () => {
       state.speaking = false;
       state.activity = 0.2;
       document.getElementById('status-badge').textContent = '● ONLINE';
       document.getElementById('status-badge').style.color = '#00ff88';
-    }, Math.min(dur, 8000));
+    });
   } catch(e) {
     showThinking(false);
     state.thinking = false;
