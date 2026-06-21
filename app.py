@@ -65,10 +65,7 @@ def sb_recall(query):
             k = row["key"]
             if k in q or any(w in k for w in q.split() if len(w) > 2):
                 return f"{k}: {row['value']}"
-        if rows:
-            items = [f"{r['key']}: {r['value']}" for r in rows[:5]]
-            return "Stored memories: " + "; ".join(items)
-        return None
+        return "no_match"  # distinct from None (unreachable) — caller decides wording
     except Exception as e:
         print(f"Supabase recall error: {e}")
         return None
@@ -221,7 +218,9 @@ def do_remember(key, value):
 def do_recall(query):
     result = sb_recall(query)
     if result is None:
-        return "Memory is currently empty or unreachable."
+        return "Shared memory is currently unreachable — try again shortly."
+    if result == "no_match":
+        return "That detail isn't in my data banks. Tell me to remember it now."
     return result
 
 TOOL_DISPATCH = {
