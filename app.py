@@ -11,12 +11,36 @@ Run locally: py app.py
 
 import os
 import json
+import re
 import random
 import datetime
 import requests
 from flask import Flask, request, jsonify, send_from_directory
 
 app = Flask(__name__, static_folder="static")
+
+# ── Deterministic "remember X is Y" pattern — safety net, see /ask route ──────
+_re_remember = re.compile(
+    r"^(?:hey jarvis|jarvis)?\s*(?:please\s+)?remember\s+(?:that\s+)?(.+)$",
+    re.IGNORECASE
+)
+
+def _extract_remember_kv(fragment):
+    """
+    'my favourite colour is cyan' -> ('favourite colour', 'cyan')
+    'favourite colour: cyan'      -> ('favourite colour', 'cyan')
+    falls back to a generic note if no clean split is found.
+    """
+    fragment = fragment.strip()
+    for sep in [" is ", " are ", " = ", ": "]:
+        if sep in fragment:
+            key, _, value = fragment.partition(sep)
+            key = key.strip().lower()
+            key = re.sub(r"^(my|that|the)\s+", "", key)
+            value = value.strip().rstrip(".")
+            if key and value:
+                return key, value
+    return None, None
 
 # ── Config ────────────────────────────────────────────────────────────────────
 GROQ_API_KEY     = os.environ.get("GROQ_API_KEY", "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")
@@ -112,10 +136,26 @@ EMOTIONAL INTELLIGENCE:
 - Bored → suggest something interesting with dry wit.
 - Sarcastic → detect and play along wittily.
 
-MEMORY:
-You can remember facts the user explicitly asks you to remember, and recall them later
-in this same conversation or future ones if told to. Use the remember_fact tool when the
-user says "remember X" and the recall_fact tool when they ask "what is my X" or similar.
+MEMORY — MANDATORY TOOL USE, NOT OPTIONAL:
+You do not have a real memory of your own — you only "remember" things by actually
+calling the remember_fact tool, and you only "recall" things by actually calling the
+recall_fact tool. There is no other way. Saying "noted" or "I'll remember that" in
+plain text WITHOUT calling the tool means nothing was actually saved — never do this,
+it is a lie to the user.
+
+RULE: Whenever the user says anything matching the pattern "remember [that] X is Y",
+"remember X", "don't forget X", or similar — you MUST call remember_fact with a sensible
+key and value extracted from their sentence, in the SAME response, before replying.
+Only after the tool call succeeds should you confirm it to the user in character.
+
+RULE: Whenever the user asks "what is my X", "what's my X", "do you remember X" — you
+MUST call recall_fact first to actually check, before answering. Never guess or assume.
+
+Example — user says "remember my favourite colour is cyan":
+  CORRECT: call remember_fact(key="favourite colour", value="cyan"), then reply
+           "Favourite colour: cyan. Stored, Sir."
+  WRONG:   reply "Your favourite colour, cyan, has been noted, Sir." without calling
+           the tool — this is forbidden, nothing was actually saved.
 
 RESPONSE FORMAT FOR MOBILE:
 - Short paragraphs. No markdown ** or ## formatting — plain text only.
@@ -333,6 +373,18 @@ def ask():
         return jsonify({"reply": f"The time is {datetime.datetime.now().strftime('%I:%M %p')}, {OWNER}."})
     if c in ("what's the date", "what day is it", "today's date", "date"):
         return jsonify({"reply": f"Today is {datetime.datetime.now().strftime('%A, %d %B %Y')}, {OWNER}."})
+
+    # ── Deterministic safety net for "remember X is Y" ─────────────────────
+    # Tool-calling is usually reliable but not guaranteed — the model can
+    # occasionally reply conversationally ("noted, Sir") without actually
+    # invoking remember_fact, which silently loses the fact. This regex
+    # path guarantees the write happens regardless of what the AI decides,
+    # while the AI still generates the natural-sounding confirmation.
+    remember_match = _re_remember.match(c)
+    if remember_match:
+        key, value = _extract_remember_kv(remember_match.group(1))
+        if key and value:
+            sb_remember(key, value)  # guaranteed write, independent of tool-calling
 
     # Everything else — straight to the AI, exactly like ChatGPT/Gemini
     reply = ask_jarvis(text, history)
