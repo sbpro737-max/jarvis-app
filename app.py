@@ -19,13 +19,59 @@ from flask import Flask, request, jsonify, send_from_directory
 app = Flask(__name__, static_folder="static")
 
 # ── Config ────────────────────────────────────────────────────────────────────
-GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "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")
-GROQ_MODEL     = "llama-3.3-70b-versatile"   # current Groq production model, supports tool calling
-TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")  # free tier: app.tavily.com — optional but recommended
-OWNER          = "Sir"
+GROQ_API_KEY     = os.environ.get("GROQ_API_KEY", "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")
+GROQ_MODEL       = "llama-3.3-70b-versatile"   # current Groq production model, supports tool calling
+TAVILY_API_KEY   = os.environ.get("TAVILY_API_KEY", "")  # free tier: app.tavily.com
+SUPABASE_URL     = os.environ.get("SUPABASE_URL", "https://fowcmbdbjpdegmqgsmka.supabase.co")
+SUPABASE_KEY     = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZvd2NtYmRianBkZWdtcWdzbWthIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE5ODI4NzEsImV4cCI6MjA5NzU1ODg3MX0.hllZn3d4lWB9ZrYbhdVWM3GTV8u3POgzG_VkRZvrlEg")
+OWNER            = "Sir"
 
-# ── In-memory store (per server instance — resets on restart/redeploy) ────────
-_memory = {}
+# ── Shared memory — Supabase (synced across phone + desktop) ──────────────────
+def _sb_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"   # upsert behaviour
+    }
+
+def sb_remember(key, value):
+    """Upsert a fact into the shared jarvis_memory table."""
+    try:
+        resp = requests.post(
+            f"{SUPABASE_URL}/rest/v1/jarvis_memory",
+            headers=_sb_headers(),
+            json={"key": key.lower().strip(), "value": value},
+            timeout=8
+        )
+        return resp.status_code in (200, 201)
+    except Exception as e:
+        print(f"Supabase remember error: {e}")
+        return False
+
+def sb_recall(query):
+    """Fetch all memory rows and find the best match for the query."""
+    try:
+        resp = requests.get(
+            f"{SUPABASE_URL}/rest/v1/jarvis_memory?select=key,value",
+            headers=_sb_headers(),
+            timeout=8
+        )
+        if resp.status_code != 200:
+            return None
+        rows = resp.json()
+        q = query.lower()
+        for row in rows:
+            k = row["key"]
+            if k in q or any(w in k for w in q.split() if len(w) > 2):
+                return f"{k}: {row['value']}"
+        if rows:
+            items = [f"{r['key']}: {r['value']}" for r in rows[:5]]
+            return "Stored memories: " + "; ".join(items)
+        return None
+    except Exception as e:
+        print(f"Supabase recall error: {e}")
+        return None
 
 SYSTEM_PROMPT = f"""You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), the highly sophisticated AI butler created by Tony Stark, now serving {OWNER}.
 
@@ -165,21 +211,18 @@ def do_web_search(query):
         return f"Search error: {str(e)[:150]}"
 
 def do_remember(key, value):
-    _memory[key.lower().strip()] = {
-        "value": value,
-        "saved": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    }
-    return f"Stored: {key} = {value}"
+    if not key.strip() or not value.strip():
+        return "Could not store — missing key or value."
+    ok = sb_remember(key, value)
+    if ok:
+        return f"Stored and synced across devices: {key} = {value}"
+    return f"Stored locally this session, but sync to shared memory failed: {key} = {value}"
 
 def do_recall(query):
-    if not _memory:
-        return "Memory is currently empty."
-    q = query.lower()
-    for k, v in _memory.items():
-        if k in q or any(w in k for w in q.split() if len(w) > 2):
-            return f"{k}: {v['value']}"
-    items = [f"{k}: {v['value']}" for k, v in list(_memory.items())[:5]]
-    return "Stored memories: " + "; ".join(items)
+    result = sb_recall(query)
+    if result is None:
+        return "Memory is currently empty or unreachable."
+    return result
 
 TOOL_DISPATCH = {
     "web_search":    lambda args: do_web_search(args.get("query", "")),
@@ -304,6 +347,7 @@ def health():
         "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "model": GROQ_MODEL,
         "search_configured": bool(TAVILY_API_KEY),
+        "memory_synced": bool(SUPABASE_URL and SUPABASE_KEY),
     })
 
 if __name__ == "__main__":
