@@ -19,24 +19,85 @@ from flask import Flask, request, jsonify, send_from_directory
 
 app = Flask(__name__, static_folder="static")
 
-# ── Deterministic "remember X is Y" pattern — safety net, see /ask route ──────
-_re_remember = re.compile(
-    r"^(?:hey jarvis|jarvis)?\s*(?:please\s+)?remember\s+(?:that\s+)?(.+)$",
-    re.IGNORECASE
-)
+# ── Fuzzy "this looks like a remember request" detector ───────────────────────
+# Deliberately NOT an exact regex on the word "remember" — typos like
+# "remebr", "rember", "remeber" are extremely common and an exact match
+# silently fails on them, which is exactly the bug we hit. Instead we check
+# for a short edit-distance to common spellings of "remember"/"note", which
+# tolerates real-world typos without needing the AI to get a chance to skip
+# the tool call.
+_REMEMBER_SINGLE_WORD = ["remember", "rememer", "remebr", "rember", "remeber",
+                          "rememeber", "remembr", "rememberr"]
+_REMEMBER_PHRASES     = ["note that", "dont forget", "don't forget"]
 
-def _extract_remember_kv(fragment):
+def _close_enough(a, b, max_dist=2):
+    """Simple bounded Levenshtein distance — good enough for short trigger words."""
+    if abs(len(a) - len(b)) > max_dist:
+        return False
+    if len(a) < 3 or len(b) < 3:
+        return a == b
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            curr[j] = min(prev[j] + 1, curr[j-1] + 1, prev[j-1] + cost)
+        prev = curr
+    return prev[-1] <= max_dist
+
+def _find_remember_trigger_end(text):
     """
-    'my favourite colour is cyan' -> ('favourite colour', 'cyan')
-    'favourite colour: cyan'      -> ('favourite colour', 'cyan')
-    falls back to a generic note if no clean split is found.
+    Scans the first few words for a remember-trigger (single word, fuzzy
+    matched, or a known multi-word phrase) and returns the character index
+    right after the trigger ends — or None if no trigger is found anywhere
+    near the start. Checking every leading word (not just word[0]) means
+    filler like "please"/"jarvis"/"plz" before the trigger doesn't break
+    detection.
     """
-    fragment = fragment.strip()
+    lower = text.lower()
+    words = lower.split()
+
+    # Multi-word phrases first ("dont forget", "note that")
+    for phrase in _REMEMBER_PHRASES:
+        idx = lower.find(phrase)
+        if idx != -1 and idx < 20:  # only count it if it's near the start
+            return idx + len(phrase)
+
+    # Single fuzzy-matched trigger word, scanning the first few words
+    for i, w in enumerate(words[:4]):
+        w_clean = w.strip(".,!?")
+        for variant in _REMEMBER_SINGLE_WORD:
+            if _close_enough(w_clean, variant):
+                # Find where this specific word actually starts in the original
+                # string (not just first occurrence, in case of repeats)
+                search_from = 0
+                for _ in range(i):
+                    search_from = lower.index(words[_], search_from) + len(words[_])
+                start = lower.index(w_clean, search_from)
+                return start + len(w_clean)
+    return None
+
+def _looks_like_remember(text):
+    return _find_remember_trigger_end(text) is not None
+
+def _extract_remember_kv(text):
+    """
+    Best-effort key/value split. Strips everything up to and including the
+    detected trigger word/phrase (whatever it was, however misspelled),
+    plus common filler words ("that", "my", "the") right after it, then
+    splits the remainder on is/are/=/: to get key and value.
+    """
+    trigger_end = _find_remember_trigger_end(text)
+    if trigger_end is None:
+        return None, None
+
+    remainder = text[trigger_end:].strip()
+    remainder = re.sub(r"^(that\s+)?(my\s+|the\s+)?", "", remainder, flags=re.IGNORECASE)
+
     for sep in [" is ", " are ", " = ", ": "]:
-        if sep in fragment:
-            key, _, value = fragment.partition(sep)
-            key = key.strip().lower()
-            key = re.sub(r"^(my|that|the)\s+", "", key)
+        if sep in remainder:
+            key, _, value = remainder.partition(sep)
+            key   = key.strip().lower()
             value = value.strip().rstrip(".")
             if key and value:
                 return key, value
@@ -377,12 +438,12 @@ def ask():
     # ── Deterministic safety net for "remember X is Y" ─────────────────────
     # Tool-calling is usually reliable but not guaranteed — the model can
     # occasionally reply conversationally ("noted, Sir") without actually
-    # invoking remember_fact, which silently loses the fact. This regex
-    # path guarantees the write happens regardless of what the AI decides,
+    # invoking remember_fact, which silently loses the fact. This fuzzy
+    # (typo-tolerant) check guarantees the write happens regardless of what
+    # the AI decides AND regardless of how "remember" was misspelled,
     # while the AI still generates the natural-sounding confirmation.
-    remember_match = _re_remember.match(c)
-    if remember_match:
-        key, value = _extract_remember_kv(remember_match.group(1))
+    if _looks_like_remember(c):
+        key, value = _extract_remember_kv(c)
         if key and value:
             sb_remember(key, value)  # guaranteed write, independent of tool-calling
 
